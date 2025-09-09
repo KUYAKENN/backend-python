@@ -77,6 +77,67 @@ class FaceRecognitionApp:
                 'status': 'healthy',
                 'message': 'ArcFace Recognition Service is running'
             })
+        
+        @self.app.route('/', methods=['GET'])
+        def welcome():
+            """Welcome endpoint with personalized message"""
+            return jsonify({
+                'status': 'online',
+                'message': 'Hello Sir Ken! 👋',
+                'service': 'Face Recognition API',
+                'version': '1.0.0',
+                'timestamp': datetime.now().isoformat(),
+                'endpoints': {
+                    'health': '/health',
+                    'recognize': '/recognize',
+                    'attendance': '/api/attendance',
+                    'stats': '/stats',
+                    'initialize': '/initialize'
+                }
+            })
+        
+        @self.app.route('/welcome', methods=['GET'])
+        def personalized_welcome():
+            """Personalized welcome message"""
+            return """
+            <html>
+            <head>
+                <title>Face Recognition Service</title>
+                <style>
+                    body { 
+                        font-family: Arial, sans-serif; 
+                        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                        color: white; 
+                        text-align: center; 
+                        padding: 50px;
+                        margin: 0;
+                    }
+                    .container {
+                        background: rgba(255,255,255,0.1);
+                        border-radius: 20px;
+                        padding: 40px;
+                        backdrop-filter: blur(10px);
+                        box-shadow: 0 8px 32px rgba(0,0,0,0.3);
+                        max-width: 600px;
+                        margin: 0 auto;
+                    }
+                    h1 { font-size: 3em; margin-bottom: 20px; }
+                    .status { font-size: 1.5em; color: #4CAF50; margin: 20px 0; }
+                    .info { font-size: 1.2em; margin: 10px 0; opacity: 0.9; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>🎯 Hello Sir Ken! 👋</h1>
+                    <div class="status">✅ Face Recognition Service is Running</div>
+                    <div class="info">📊 ArcFace Recognition System v1.0.0</div>
+                    <div class="info">🚀 Ready to recognize faces and track attendance</div>
+                    <div class="info">⚡ Auto-reload monitoring enabled</div>
+                    <div class="info">🌐 CORS bypassed - API accessible from anywhere</div>
+                </div>
+            </body>
+            </html>
+            """
 
         @self.app.route('/auto-reload/start', methods=['POST'])
         def start_auto_reload():
@@ -551,27 +612,51 @@ class FaceRecognitionApp:
     def initialize_on_startup(self):
         """Initialize system on startup"""
         try:
-            logger.info("Starting ArcFace Recognition Service...")
+            # Print startup banner
+            print("\n" + "="*80)
+            print("🎯 FACE RECOGNITION SERVICE STARTING UP")
+            print("="*80)
+            print("👋 Hello Sir Ken! Welcome to your Face Recognition System")
+            print("🚀 ArcFace Recognition Service v1.0.0")
+            print("📅 Started on:", datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+            print("="*80)
+            
+            logger.info("🔥 Starting ArcFace Recognition Service for Sir Ken...")
             
             # Load existing face database
             self.arcface_service.load_face_database()
+            print("📂 Loading face database...")
             
             # If no faces in database, try to load from Supabase
             if len(self.arcface_service.face_database) == 0:
+                print("📥 No faces in local database, loading from Supabase...")
                 logger.info("No faces in local database, loading from Supabase...")
                 users = self.supabase_service.get_all_users_with_profiles()
                 if users:
                     success_count = self.arcface_service.register_multiple_faces(users)
                     self.auto_reload_manager.known_user_count = len(users)
+                    print(f"✅ Registered {success_count} faces from Supabase")
                     logger.info(f"Registered {success_count} faces from Supabase")
             
-            logger.info(f"System ready with {len(self.arcface_service.face_database)} registered faces")
+            face_count = len(self.arcface_service.face_database)
+            print(f"🧠 System ready with {face_count} registered faces")
+            logger.info(f"System ready with {face_count} registered faces")
             
             # Start auto-reload monitoring
             self.auto_reload_manager.start_monitoring()
+            print("🔄 Auto-reload monitoring enabled - detecting new registrations automatically")
             logger.info("🔄 Auto-reload monitoring enabled - system will detect new registrations automatically")
             
+            print("\n" + "="*80)
+            print("🌟 SYSTEM STATUS: READY")
+            print("🌐 Access your service at: http://localhost:5000")
+            print("👀 Welcome page: http://localhost:5000/welcome")
+            print("📊 API Status: http://localhost:5000/health")
+            print("🎯 Sir Ken, your Face Recognition System is now ONLINE! 🚀")
+            print("="*80 + "\n")
+            
         except Exception as e:
+            print(f"❌ ERROR during startup: {e}")
             logger.error(f"Error during startup: {e}")
 
     def get_flask_app(self):
