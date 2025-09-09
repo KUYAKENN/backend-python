@@ -25,7 +25,13 @@ class FaceRecognitionApp:
     def __init__(self):
         # Initialize Flask app
         self.app = Flask(__name__)
-        CORS(self.app)
+        
+        # Configure CORS to allow all origins and bypass CORS restrictions
+        CORS(self.app, 
+             origins="*",  # Allow all origins
+             allow_headers=["*"],  # Allow all headers
+             methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],  # Allow all common methods
+             supports_credentials=True)
         
         # Initialize services
         self.arcface_service = ArcFaceService()
@@ -45,6 +51,24 @@ class FaceRecognitionApp:
     
     def setup_routes(self):
         """Setup all Flask routes"""
+        
+        # Add manual CORS headers for all responses
+        @self.app.after_request
+        def after_request(response):
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+            response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+            response.headers.add('Access-Control-Allow-Credentials', 'true')
+            return response
+        
+        # Handle preflight OPTIONS requests
+        @self.app.route('/<path:path>', methods=['OPTIONS'])
+        def handle_options(path):
+            response = jsonify({'status': 'ok'})
+            response.headers.add('Access-Control-Allow-Origin', '*')
+            response.headers.add('Access-Control-Allow-Headers', 'Content-Type,Authorization,X-Requested-With')
+            response.headers.add('Access-Control-Allow-Methods', 'GET,PUT,POST,DELETE,OPTIONS')
+            return response
         
         @self.app.route('/health', methods=['GET'])
         def health_check():
