@@ -60,7 +60,7 @@ class SupabaseService:
         return datetime.now(ph_timezone)
     
     def get_ph_date(self):
-        """Get current date in Philippine timezone (UTC)"""
+        """Get current date in Philippine timezone (UTC+8)"""
         return self.get_ph_datetime().date()
     
     def convert_utc_to_ph_time(self, utc_time_str: str) -> str:
@@ -271,7 +271,8 @@ class SupabaseService:
             # Use Philippine timezone for consistent local time
             ph_now = self.get_ph_datetime()
             today = ph_now.date().isoformat()
-            current_time = ph_now.isoformat()
+            # Store time as Philippine time WITHOUT timezone info to avoid Supabase conversion
+            current_time = ph_now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]  # Remove microseconds to match DB format
             
             # Check if user already marked attendance today
             existing_attendance = self.supabase.table('attendance').select('*').eq('userId', user_id).eq('scanDate', today).execute()
