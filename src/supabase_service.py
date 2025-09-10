@@ -145,6 +145,269 @@ class SupabaseService:
         
         return results
     
+    def get_all_users_with_details(self) -> Optional[List[Dict]]:
+        """Get all users with their detailed profile information from user_details table"""
+        try:
+            # Query users with their details
+            response = self.supabase.table('user_details').select('*').execute()
+            
+            if response.data:
+                users = []
+                for user_detail in response.data:
+                    user_data = {
+                        'id': user_detail.get('userId', ''),  # Use userId from user_details as main ID
+                        'detail_id': user_detail.get('id', ''),
+                        'firstName': user_detail.get('firstName', ''),
+                        'lastName': user_detail.get('lastName', ''),
+                        'middleName': user_detail.get('middleName', ''),
+                        'suffix': user_detail.get('suffix', ''),
+                        'preferredName': user_detail.get('preferredName', ''),
+                        'faceScannedUrl': user_detail.get('faceScannedUrl', ''),
+                        'position': user_detail.get('position', ''),
+                        'gender': user_detail.get('gender', ''),
+                        'ageBracket': user_detail.get('ageBracket', ''),
+                        'nationality': user_detail.get('nationality', ''),
+                        # Add userType and email for compatibility
+                        'userType': 'attendee',  # Default type
+                        'email': f"{user_detail.get('firstName', '').lower()}.{user_detail.get('lastName', '').lower()}@event.com"
+                    }
+                    users.append(user_data)
+                
+                logger.info(f"Successfully retrieved {len(users)} users with details")
+                return users
+            else:
+                logger.warning("No user details found")
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting users with details: {e}")
+            return None
+    
+    def save_face_embedding(self, user_detail_id: str, user_id: str, embedding_data: Dict) -> Dict:
+        """Save face embedding data to the database"""
+        try:
+            # Convert numpy array to list for JSON storage
+            if hasattr(embedding_data.get('embedding'), 'tolist'):
+                embedding_list = embedding_data['embedding'].tolist()
+            else:
+                embedding_list = embedding_data['embedding']
+            
+            face_data = {
+                'user_detail_id': user_detail_id,
+                'user_id': user_id,
+                'embedding': embedding_list,
+                'embedding_size': len(embedding_list),
+                'confidence': float(embedding_data.get('confidence', 0.0)),
+                'face_quality_score': float(embedding_data.get('face_quality_score', 0.0)),
+                'source_url': embedding_data.get('source_url', ''),
+                'enrollment_method': embedding_data.get('enrollment_method', 'api')
+            }
+            
+            # Insert or update face embedding
+            response = self.supabase.table('face_embeddings').upsert(
+                face_data, 
+                on_conflict='user_detail_id'
+            ).execute()
+            
+            if response.data:
+                logger.info(f"Successfully saved face embedding for user_detail_id {user_detail_id}")
+                return {'success': True, 'data': response.data[0]}
+            else:
+                logger.error("No data returned when saving face embedding")
+                return {'success': False, 'error': 'No data returned'}
+                
+        except Exception as e:
+            logger.error(f"Error saving face embedding: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def save_face_landmarks(self, user_detail_id: str, user_id: str, landmarks_data: Dict) -> Dict:
+        """Save face landmarks data to the database"""
+        try:
+            landmark_data = {
+                'user_detail_id': user_detail_id,
+                'user_id': user_id,
+                'landmarks': landmarks_data.get('landmarks', []),
+                'bbox': landmarks_data.get('bbox', []),
+                'face_area': landmarks_data.get('face_area'),
+                'face_angle': landmarks_data.get('face_angle'),
+                'age': landmarks_data.get('age'),
+                'gender': landmarks_data.get('gender'),
+                'emotion': landmarks_data.get('emotion', {}),
+                'face_attributes': landmarks_data.get('face_attributes', {})
+            }
+            
+            # Insert or update face landmarks
+            response = self.supabase.table('face_landmarks').upsert(
+                landmark_data, 
+                on_conflict='user_detail_id'
+            ).execute()
+            
+            if response.data:
+                logger.info(f"Successfully saved face landmarks for user_detail_id {user_detail_id}")
+                return {'success': True, 'data': response.data[0]}
+            else:
+                logger.error("No data returned when saving face landmarks")
+                return {'success': False, 'error': 'No data returned'}
+                
+        except Exception as e:
+            logger.error(f"Error saving face landmarks: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def log_face_enrollment(self, user_detail_id: str, user_id: str, enrollment_data: Dict) -> Dict:
+        """Log face enrollment attempt"""
+        try:
+            log_data = {
+                'user_detail_id': user_detail_id,
+                'user_id': user_id,
+                'enrollment_status': enrollment_data.get('enrollment_status', 'failed'),
+                'face_count_detected': enrollment_data.get('face_count_detected', 0),
+                'face_quality_score': enrollment_data.get('face_quality_score'),
+                'error_message': enrollment_data.get('error_message'),
+                'image_source': enrollment_data.get('image_source', 'api'),
+                'source_url': enrollment_data.get('source_url'),
+                'image_metadata': enrollment_data.get('image_metadata', {}),
+                'processing_time_ms': enrollment_data.get('processing_time_ms')
+            }
+            
+            response = self.supabase.table('face_enrollment_log').insert(log_data).execute()
+            
+            if response.data:
+                logger.info(f"Successfully logged face enrollment for user_detail_id {user_detail_id}")
+                return {'success': True, 'data': response.data[0]}
+            else:
+                return {'success': False, 'error': 'No data returned'}
+                
+        except Exception as e:
+            logger.error(f"Error logging face enrollment: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def log_face_recognition(self, recognition_data: Dict) -> Dict:
+        """Log face recognition attempt"""
+        try:
+            log_data = {
+                'session_id': recognition_data.get('session_id'),
+                'recognized_user_detail_id': recognition_data.get('recognized_user_detail_id'),
+                'recognized_user_id': recognition_data.get('recognized_user_id'),
+                'similarity_score': recognition_data.get('similarity_score'),
+                'threshold_used': recognition_data.get('threshold_used', 0.5),
+                'candidates_count': recognition_data.get('candidates_count', 0),
+                'recognition_status': recognition_data.get('recognition_status', 'error'),
+                'error_message': recognition_data.get('error_message'),
+                'processing_time_ms': recognition_data.get('processing_time_ms'),
+                'image_metadata': recognition_data.get('image_metadata', {}),
+                'all_similarities': recognition_data.get('all_similarities', {}),
+                'attendance_marked': recognition_data.get('attendance_marked', False),
+                'attendance_id': recognition_data.get('attendance_id'),
+                'ip_address': recognition_data.get('ip_address'),
+                'user_agent': recognition_data.get('user_agent')
+            }
+            
+            response = self.supabase.table('face_recognition_log').insert(log_data).execute()
+            
+            if response.data:
+                logger.info(f"Successfully logged face recognition attempt")
+                return {'success': True, 'data': response.data[0]}
+            else:
+                return {'success': False, 'error': 'No data returned'}
+                
+        except Exception as e:
+            logger.error(f"Error logging face recognition: {e}")
+            return {'success': False, 'error': str(e)}
+    
+    def get_users_for_face_enrollment(self) -> List[Dict]:
+        """Get users who have face images but are not yet enrolled"""
+        try:
+            # Query to get users with face images that haven't been enrolled yet
+            response = self.supabase.rpc('get_users_ready_for_enrollment').execute()
+            
+            if not response.data:
+                # Fallback to manual query if RPC doesn't exist
+                response = self.supabase.table('user_details').select(
+                    'id, "userId", "firstName", "lastName", "middleName", "faceScannedUrl"'
+                ).neq('faceScannedUrl', '').is_('faceScannedUrl', 'not.null').execute()
+                
+                if response.data:
+                    # Filter out already enrolled users
+                    enrolled_response = self.supabase.table('face_embeddings').select('user_detail_id').execute()
+                    enrolled_ids = {item['user_detail_id'] for item in enrolled_response.data} if enrolled_response.data else set()
+                    
+                    users_to_enroll = []
+                    for user in response.data:
+                        if user['id'] not in enrolled_ids:
+                            users_to_enroll.append(user)
+                    
+                    logger.info(f"Found {len(users_to_enroll)} users ready for face enrollment")
+                    return users_to_enroll
+            
+            return response.data if response.data else []
+                
+        except Exception as e:
+            logger.error(f"Error getting users for face enrollment: {e}")
+            return []
+    
+    def get_face_embeddings(self) -> List[Dict]:
+        """Get all face embeddings from database"""
+        try:
+            response = self.supabase.table('face_embeddings').select(
+                'user_detail_id, user_id, embedding, confidence'
+            ).execute()
+            
+            if response.data:
+                logger.info(f"Retrieved {len(response.data)} face embeddings")
+                return response.data
+            else:
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting face embeddings: {e}")
+            return []
+    
+    def get_user_face_status(self) -> List[Dict]:
+        """Get face enrollment status for all users"""
+        try:
+            # Use the view we created
+            response = self.supabase.table('user_face_status').select('*').execute()
+            
+            if response.data:
+                return response.data
+            else:
+                return []
+                
+        except Exception as e:
+            logger.error(f"Error getting user face status: {e}")
+            return []
+            return False
+    
+    def log_face_recognition(self, user_id: str, recognition_data: Dict) -> bool:
+        """Log a face recognition event"""
+        try:
+            log_data = {
+                'user_id': user_id,
+                'recognition_confidence': recognition_data.get('confidence', 0.0),
+                'recognition_method': recognition_data.get('method', 'camera'),
+                'bbox_x1': recognition_data.get('bbox', [None])[0],
+                'bbox_y1': recognition_data.get('bbox', [None, None])[1] if len(recognition_data.get('bbox', [])) > 1 else None,
+                'bbox_x2': recognition_data.get('bbox', [None, None, None])[2] if len(recognition_data.get('bbox', [])) > 2 else None,
+                'bbox_y2': recognition_data.get('bbox', [None, None, None, None])[3] if len(recognition_data.get('bbox', [])) > 3 else None,
+                'landmarks': recognition_data.get('landmarks', []),
+                'attendance_id': recognition_data.get('attendance_id'),
+                'device_info': recognition_data.get('device_info', {}),
+                'session_id': recognition_data.get('session_id')
+            }
+            
+            response = self.supabase.table('face_recognition_logs').insert(log_data).execute()
+            
+            if response.data:
+                logger.info(f"Successfully logged face recognition for user {user_id}")
+                return True
+            else:
+                logger.error(f"Failed to log face recognition for user {user_id}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error logging face recognition: {e}")
+            return False
+    
     def get_all_users_with_profiles(self) -> Optional[List[Dict]]:
         """Get all users with their profile information - works with user_details and user_accounts tables"""
         try:

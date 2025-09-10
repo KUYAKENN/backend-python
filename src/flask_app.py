@@ -10,6 +10,8 @@ import time
 import os
 import pandas as pd
 import base64
+import cv2
+import numpy as np
 
 from .arcface_service import ArcFaceService
 from .supabase_service import SupabaseService
@@ -36,6 +38,15 @@ class FaceRecognitionApp:
         # Initialize services
         self.arcface_service = ArcFaceService()
         self.supabase_service = SupabaseService()
+        
+        # Inject supabase service into arcface service
+        self.arcface_service.set_supabase_service(self.supabase_service)
+        
+        # Load existing face database
+        self.arcface_service.load_face_database()
+        
+        # Also try to load embeddings from database
+        self.arcface_service.load_embeddings_from_database()
         
         # Recognition cooldown tracking
         self.last_recognition = {}
@@ -90,6 +101,11 @@ class FaceRecognitionApp:
                 'endpoints': {
                     'health': '/health',
                     'recognize': '/recognize',
+                    'enroll': '/enroll',
+                    'extract-landmarks': '/extract-landmarks',
+                    'faces': '/faces',
+                    'sync-faces-from-db': '/sync-faces-from-db',
+                    'face-status': '/face-status',
                     'attendance': '/api/attendance',
                     'stats': '/stats',
                     'initialize': '/initialize'
@@ -441,6 +457,193 @@ class FaceRecognitionApp:
                 return jsonify({
                     'status': 'error',
                     'message': f'Debug failed: {str(e)}'
+                }), 500
+
+        # ===== FACE ENROLLMENT AND MANAGEMENT ENDPOINTS =====
+
+        @self.app.route('/enroll', methods=['POST'])
+        def enroll_face():
+            """Enroll a new face for recognition"""
+            try:
+                data = request.get_json()
+                
+                if not data or 'image' not in data or 'user_detail_id' not in data or 'user_id' not in data:
+                    return jsonify({
+                        'success': False,
+                        'message': 'Missing required fields: image, user_detail_id, and user_id'
+                    }), 400
+                
+                user_detail_id = data['user_detail_id']
+                user_id = data['user_id']
+                base64_image = data['image']
+                user_data = data.get('user_data', {})
+                
+                # Enroll the face
+                result = self.arcface_service.enroll_face_from_base64(user_detail_id, user_id, base64_image, user_data)
+                
+                if result['success']:
+                    return jsonify(result), 200
+                else:
+                    return jsonify(result), 400
+                    
+            except Exception as e:
+                logger.error(f"Error enrolling face: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error enrolling face: {str(e)}'
+                }), 500
+
+        @self.app.route('/extract-landmarks', methods=['POST'])
+        def extract_landmarks():
+            """Extract facial landmarks and information from image"""
+            try:
+                data = request.get_json()
+                
+                if not data or 'image' not in data:
+                    return jsonify({
+                        'success': False,
+                        'message': 'No image data provided'
+                    }), 400
+                
+                base64_image = data['image']
+                
+                # Decode and process image
+                import base64
+                image_data = base64.b64decode(base64_image.split(',')[1] if ',' in base64_image else base64_image)
+                image = Image.open(BytesIO(image_data))
+                opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                
+                # Extract face info
+                face_info = self.arcface_service.extract_face_info(opencv_image)
+                
+                if face_info:
+                    return jsonify({
+                        'success': True,
+                        'face_detected': True,
+                        'bbox': face_info['bbox'],
+                        'landmarks': face_info['landmarks'],
+                        'confidence': face_info['confidence'],
+                        'age': face_info['age'],
+                        'gender': face_info['gender']
+                    })
+                else:
+                    return jsonify({
+                        'success': True,
+                        'face_detected': False,
+                        'message': 'No face detected in image'
+                    })
+                    
+            except Exception as e:
+                logger.error(f"Error extracting landmarks: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error extracting landmarks: {str(e)}'
+                }), 500
+
+        @self.app.route('/faces', methods=['GET'])
+        def list_enrolled_faces():
+            """List all enrolled faces"""
+            try:
+                faces = self.arcface_service.list_enrolled_faces()
+                
+                return jsonify({
+                    'success': True,
+                    'faces': faces,
+                    'total_count': len(faces)
+                })
+                
+            except Exception as e:
+                logger.error(f"Error listing faces: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error listing faces: {str(e)}'
+                }), 500
+
+        @self.app.route('/faces/<user_id>', methods=['DELETE'])
+        def remove_face(user_id):
+            """Remove a specific user's face from the database"""
+            try:
+                success = self.arcface_service.remove_face(user_id)
+                
+                if success:
+                    return jsonify({
+                        'success': True,
+                        'message': f'Face removed for user {user_id}'
+                    })
+                else:
+                    return jsonify({
+                        'success': False,
+                        'message': f'User {user_id} not found in face database'
+                    }), 404
+                    
+            except Exception as e:
+                logger.error(f"Error removing face: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error removing face: {str(e)}'
+                }), 500
+
+        @self.app.route('/sync-faces-from-db', methods=['POST'])
+        def sync_faces_from_database():
+            """Sync and enroll faces from existing database images"""
+            try:
+                # Call the sync method
+                result = self.arcface_service.sync_faces_from_database()
+                
+                if result['success']:
+                    return jsonify(result), 200
+                else:
+                    return jsonify(result), 500
+                    
+            except Exception as e:
+                logger.error(f"Error syncing faces from database: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error syncing faces: {str(e)}'
+                }), 500
+
+        @self.app.route('/face-status', methods=['GET'])
+        def get_face_enrollment_status():
+            """Get face enrollment status for all users"""
+            try:
+                status_data = self.supabase_service.get_user_face_status()
+                
+                return jsonify({
+                    'success': True,
+                    'data': status_data,
+                    'total_users': len(status_data)
+                })
+                
+            except Exception as e:
+                logger.error(f"Error getting face status: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error getting face status: {str(e)}'
+                }), 500
+
+        @self.app.route('/scan-database-faces', methods=['POST'])
+        def scan_database_faces():
+            """Scan all existing face images from database and enroll them"""
+            try:
+                data = request.get_json() or {}
+                save_to_db = data.get('save_to_database', True)
+                
+                # Perform the database scan
+                result = self.arcface_service.scan_and_enroll_from_database(
+                    self.supabase_service, 
+                    save_to_db=save_to_db
+                )
+                
+                if result['success']:
+                    return jsonify(result), 200
+                else:
+                    return jsonify(result), 400
+                    
+            except Exception as e:
+                logger.error(f"Error scanning database faces: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error scanning database faces: {str(e)}'
                 }), 500
 
         # ===== ATTENDANCE ENDPOINTS =====
