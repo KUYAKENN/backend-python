@@ -267,90 +267,121 @@ class SupabaseService:
     
     def mark_attendance(self, user_id: str, user_data: Dict) -> Dict:
         """Mark attendance for a user via face recognition - only once per day"""
-        try:
-            # Use Philippine timezone for consistent local time
-            ph_now = self.get_ph_datetime()
-            today = ph_now.date().isoformat()
-            # Convert Philippine time to UTC for proper database storage
-            utc_now = ph_now.astimezone(timezone.utc)
-            current_time = utc_now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] + '+00'  # Store as UTC with timezone indicator
-            
-            # Check if user already marked attendance today
-            existing_attendance = self.supabase.table('attendance').select('*').eq('userId', user_id).eq('scanDate', today).execute()
-            
-            if existing_attendance.data:
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                # Use Philippine timezone for consistent local time
+                ph_now = self.get_ph_datetime()
+                today = ph_now.date().isoformat()
+                # Convert Philippine time to UTC for proper database storage
+                utc_now = ph_now.astimezone(timezone.utc)
+                current_time = utc_now.strftime('%Y-%m-%d %H:%M:%S.%f')[:-3] + '+00'  # Store as UTC with timezone indicator
+                
+                # Check if user already marked attendance today
+                existing_attendance = self.supabase.table('attendance').select('*').eq('userId', user_id).eq('scanDate', today).execute()
+                
+                if existing_attendance.data:
+                    return {
+                        'success': True,
+                        'message': f"Welcome back! You already checked in today at {existing_attendance.data[0].get('scanTime')}",
+                        'existing': True,
+                        'attendance_time': existing_attendance.data[0].get('scanTime'),
+                        'skip_display': True  # Don't show duplicate in attendance list
+                    }
+                
+                # Insert new attendance record with face recognition marker
+                attendance_data = {
+                    'userId': user_id,
+                    'firstName': user_data.get('firstName', ''),
+                    'lastName': user_data.get('lastName', ''),
+                    'email': user_data.get('email', ''),
+                    'userType': user_data.get('userType', 'PARTICIPANT'),
+                    'company': user_data.get('companyName', ''),
+                    'jobTitle': user_data.get('jobTitle', ''),
+                    'scanTime': current_time,
+                    'scanDate': today,
+                    'status': 'PRESENT'
+                }
+                
+                response = self.supabase.table('attendance').insert(attendance_data).execute()
+                
+                logger.info(f"NEW attendance marked for user {user_id} - {user_data.get('firstName', '')} {user_data.get('lastName', '')} via face recognition (attempt {attempt + 1})")
                 return {
                     'success': True,
-                    'message': f"Welcome back! You already checked in today at {existing_attendance.data[0].get('scanTime')}",
-                    'existing': True,
-                    'attendance_time': existing_attendance.data[0].get('scanTime'),
-                    'skip_display': True  # Don't show duplicate in attendance list
+                    'message': 'Welcome! Attendance marked successfully',
+                    'existing': False,
+                    'attendance_time': current_time,
+                    'skip_display': False  # New attendance should be displayed
                 }
-            
-            # Insert new attendance record with face recognition marker
-            attendance_data = {
-                'userId': user_id,
-                'firstName': user_data.get('firstName', ''),
-                'lastName': user_data.get('lastName', ''),
-                'email': user_data.get('email', ''),
-                'userType': user_data.get('userType', 'PARTICIPANT'),
-                'company': user_data.get('companyName', ''),
-                'jobTitle': user_data.get('jobTitle', ''),
-                'scanTime': current_time,
-                'scanDate': today,
-                'status': 'PRESENT'
-            }
-            
-            response = self.supabase.table('attendance').insert(attendance_data).execute()
-            
-            logger.info(f"NEW attendance marked for user {user_id} - {user_data.get('firstName', '')} {user_data.get('lastName', '')} via face recognition")
-            return {
-                'success': True,
-                'message': 'Welcome! Attendance marked successfully',
-                'existing': False,
-                'attendance_time': current_time,
-                'skip_display': False  # New attendance should be displayed
-            }
-            
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error marking attendance: {error_msg}")
-            return {
-                'success': False,
-                'message': f'Error marking attendance: {error_msg}'
-            }
+                
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Check if it's an SSL/network error that should be retried
+                if ("SSL" in error_msg or "timeout" in error_msg.lower() or "connection" in error_msg.lower()) and attempt < max_retries - 1:
+                    logger.warning(f"Network/SSL error marking attendance on attempt {attempt + 1}/{max_retries}, retrying in 2 seconds... Error: {error_msg}")
+                    time.sleep(2)
+                    continue
+                else:
+                    logger.error(f"Error marking attendance (final attempt): {error_msg}")
+                    return {
+                        'success': False,
+                        'message': f'Error marking attendance: {error_msg}'
+                    }
+        
+        # If we get here, all retries failed
+        return {
+            'success': False,
+            'message': 'Failed to mark attendance - network connectivity issues'
+        }
     
     def get_today_attendance(self) -> List[Dict]:
         """Get face recognition attendance records for today only"""
-        try:
-            # Use Philippine timezone for consistent local date
-            today = self.get_ph_date().isoformat()
-            
-            query = self.supabase.table('attendance').select('*').eq('scanDate', today)
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                # Use Philippine timezone for consistent local date
+                today = self.get_ph_date().isoformat()
+                
+                query = self.supabase.table('attendance').select('*').eq('scanDate', today)
 
-            # Filter records with complete user data (face recognition typically has all fields)
-            query = query.neq('firstName', '').neq('lastName', '').neq('email', '')
-            
-            response = query.order('scanTime', desc=True).execute()
-            
-            # Additional filtering to ensure only face recognition records
-            face_recognition_records = []
-            for record in response.data:
-                if (record.get('firstName') and 
-                    record.get('lastName') and 
-                    record.get('email') and
-                    record.get('userId')):
-                    # Convert scanTime to Philippine timezone for display
-                    if record.get('scanTime'):
-                        record['scanTime'] = self.convert_utc_to_ph_time(record['scanTime'])
-                    face_recognition_records.append(record)
-            
-            logger.info(f"Retrieved {len(face_recognition_records)} face recognition attendance records for today")
-            return face_recognition_records
-            
-        except Exception as e:
-            logger.error(f"Error getting today's face recognition attendance: {e}")
-            return []
+                # Filter records with complete user data (face recognition typically has all fields)
+                query = query.neq('firstName', '').neq('lastName', '').neq('email', '')
+                
+                response = query.order('scanTime', desc=True).execute()
+                
+                # Additional filtering to ensure only face recognition records
+                face_recognition_records = []
+                for record in response.data:
+                    if (record.get('firstName') and 
+                        record.get('lastName') and 
+                        record.get('email') and
+                        record.get('userId')):
+                        # Convert scanTime to Philippine timezone for display
+                        if record.get('scanTime'):
+                            record['scanTime'] = self.convert_utc_to_ph_time(record['scanTime'])
+                        face_recognition_records.append(record)
+                
+                logger.info(f"Retrieved {len(face_recognition_records)} face recognition attendance records for today (attempt {attempt + 1})")
+                return face_recognition_records
+                
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Check if it's an SSL/network error that should be retried
+                if ("SSL" in error_msg or "timeout" in error_msg.lower() or "connection" in error_msg.lower()) and attempt < max_retries - 1:
+                    logger.warning(f"Network/SSL error getting today's attendance on attempt {attempt + 1}/{max_retries}, retrying in 2 seconds... Error: {error_msg}")
+                    time.sleep(2)
+                    continue
+                else:
+                    logger.error(f"Error getting today's face recognition attendance (final attempt): {error_msg}")
+                    return []
+        
+        # If we get here, all retries failed
+        logger.error("All retry attempts failed for get_today_attendance")
+        return []
     
     def get_attendance_stats(self) -> Dict:
         """Get attendance statistics"""
@@ -399,73 +430,92 @@ class SupabaseService:
             return False
     
     def get_all_attendance(self, date_filter: str = None, user_type: str = None, status: str = None, company: str = None) -> Dict:
-        """Get all attendance records with optional filtering"""
-        try:
-            query = self.supabase.table('attendance').select('*')
-            
-            # Apply filters
-            if date_filter:
-                query = query.eq('scanDate', date_filter)
-            if user_type:
-                query = query.eq('userType', user_type)
-            if status:
-                query = query.eq('status', status)
-            if company:
-                query = query.eq('company', company)
-            
-            # Order by most recent first
-            query = query.order('scanTime', desc=True)
-            
-            response = query.execute()
-            
-            # Convert timestamps to Philippine timezone for display
-            for record in response.data:
-                if record.get('scanTime'):
-                    record['scanTime'] = self.convert_utc_to_ph_time(record['scanTime'])
-            
-            return {
-                'success': True,
-                'data': response.data,
-                'count': len(response.data)
-            }
-            
-        except Exception as e:
-            error_msg = str(e)
-            logger.error(f"Error getting all attendance: {error_msg}")
-            
-            # Check for permission errors and provide helpful message
-            if 'permission denied' in error_msg.lower() or '42501' in error_msg:
-                helpful_msg = (
-                    "Permission denied accessing database. "
-                    "Make sure you're using the SERVICE_ROLE key (not anon key) in your .env file. "
-                    "Get it from Supabase Dashboard > Settings > API > service_role key."
-                )
-                logger.error(f"PERMISSION FIX NEEDED: {helpful_msg}")
+        """Get all attendance records with retry logic for SSL errors"""
+        max_retries = 3
+        
+        for attempt in range(max_retries):
+            try:
+                query = self.supabase.table('attendance').select('*')
+                
+                # Apply filters
+                if date_filter:
+                    query = query.eq('scanDate', date_filter)
+                if user_type:
+                    query = query.eq('userType', user_type)
+                if status:
+                    query = query.eq('status', status)
+                if company:
+                    query = query.eq('company', company)
+                
+                # Order by most recent first
+                query = query.order('scanTime', desc=True)
+                
+                response = query.execute()
+                
+                # Convert timestamps to Philippine timezone for display
+                for record in response.data:
+                    if record.get('scanTime'):
+                        record['scanTime'] = self.convert_utc_to_ph_time(record['scanTime'])
+                
+                logger.info(f"Retrieved {len(response.data)} attendance records from database (attempt {attempt + 1})")
                 return {
-                    'success': False,
-                    'message': helpful_msg,
-                    'data': [],
-                    'count': 0
+                    'success': True,
+                    'data': response.data,
+                    'count': len(response.data)
                 }
-            elif 'unauthorized' in error_msg.lower() or '401' in error_msg:
-                helpful_msg = (
-                    "Unauthorized access to database. "
-                    "Check your SUPABASE_URL and SUPABASE_KEY in the .env file."
-                )
-                logger.error(f"AUTH FIX NEEDED: {helpful_msg}")
-                return {
-                    'success': False,
-                    'message': helpful_msg,
-                    'data': [],
-                    'count': 0
-                }
-            else:
-                return {
-                    'success': False,
-                    'message': f'Error getting attendance: {error_msg}',
-                    'data': [],
-                    'count': 0
-                }
+                
+            except Exception as e:
+                error_msg = str(e)
+                
+                # Check if it's an SSL/network error that should be retried
+                if ("SSL" in error_msg or "timeout" in error_msg.lower() or "connection" in error_msg.lower()) and attempt < max_retries - 1:
+                    logger.warning(f"Network/SSL error on attempt {attempt + 1}/{max_retries}, retrying in 2 seconds... Error: {error_msg}")
+                    time.sleep(2)
+                    continue
+                else:
+                    logger.error(f"Error getting all attendance (final attempt): {error_msg}")
+                    
+                    # Check for permission errors and provide helpful message
+                    if 'permission denied' in error_msg.lower() or '42501' in error_msg:
+                        helpful_msg = (
+                            "Permission denied accessing database. "
+                            "Make sure you're using the SERVICE_ROLE key (not anon key) in your .env file. "
+                            "Get it from Supabase Dashboard > Settings > API > service_role key."
+                        )
+                        logger.error(f"PERMISSION FIX NEEDED: {helpful_msg}")
+                        return {
+                            'success': False,
+                            'message': helpful_msg,
+                            'data': [],
+                            'count': 0
+                        }
+                    elif 'unauthorized' in error_msg.lower() or '401' in error_msg:
+                        helpful_msg = (
+                            "Unauthorized access to database. "
+                            "Check your SUPABASE_URL and SUPABASE_KEY in the .env file."
+                        )
+                        logger.error(f"AUTH FIX NEEDED: {helpful_msg}")
+                        return {
+                            'success': False,
+                            'message': helpful_msg,
+                            'data': [],
+                            'count': 0
+                        }
+                    else:
+                        return {
+                            'success': False,
+                            'message': f'Error getting attendance: {error_msg}',
+                            'data': [],
+                            'count': 0
+                        }
+        
+        # If we get here, all retries failed
+        return {
+            'success': False,
+            'message': 'All retry attempts failed - network connectivity issues',
+            'data': [],
+            'count': 0
+        }
     
     def get_face_recognition_attendance(self, date_filter: str = None, user_type: str = None, status: str = None, company: str = None) -> Dict:
         """Get only attendance records created through face recognition"""
@@ -522,31 +572,4 @@ class SupabaseService:
                 'count': 0
             }
     
-    def get_all_attendance(self, date_filter=None, user_type=None, status=None, company=None) -> List[Dict]:
-        """Get all attendance records from attendance table with optional filtering"""
-        try:
-            # Start with base query
-            query = self.supabase.table('attendance').select('*')
-            
-            # Apply filters if provided
-            if date_filter:
-                query = query.eq('scanDate', date_filter)
-            
-            if user_type:
-                query = query.eq('userType', user_type)
-                
-            if status:
-                query = query.eq('status', status)
-                
-            if company:
-                query = query.eq('companyName', company)
-            
-            # Order by most recent first
-            response = query.order('scanDate', desc=True).order('scanTime', desc=True).execute()
-            
-            logger.info(f"Retrieved {len(response.data)} attendance records from database")
-            return response.data
-            
-        except Exception as e:
-            logger.error(f"Error getting all attendance records: {e}")
-            return []
+
