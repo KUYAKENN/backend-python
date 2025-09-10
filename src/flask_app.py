@@ -8,13 +8,17 @@ import logging
 import threading
 import time
 import os
+import sys
 import pandas as pd
 import base64
 import cv2
 import numpy as np
 
-from .arcface_service import ArcFaceService
-from .supabase_service import SupabaseService
+# Add the src directory to Python path for imports
+sys.path.append(os.path.dirname(__file__))
+
+from arcface_service import ArcFaceService
+from supabase_service import SupabaseService
 
 # Load environment variables
 load_dotenv()

@@ -59,6 +59,55 @@ class SupabaseService:
         ph_timezone = timezone(timedelta(hours=8))
         return datetime.now(ph_timezone)
     
+    def get_storage_url(self, file_path: str, bucket_name: str = 'user-profile') -> str:
+        """Convert storage file path to accessible URL"""
+        try:
+            # If it's already a full URL, return as is
+            if file_path.startswith('http'):
+                return file_path
+            
+            # Remove leading slash if present
+            file_path = file_path.lstrip('/')
+            
+            # Create a signed URL for the file (valid for 1 hour)
+            response = self.supabase.storage.from_(bucket_name).create_signed_url(file_path, 3600)
+            
+            if response:
+                base_url = os.getenv('SUPABASE_URL')
+                signed_url = f"{base_url}/storage/v1/object/sign/{bucket_name}/{file_path}?token={response['token']}"
+                logger.debug(f"Created signed URL for {file_path}")
+                return signed_url
+            else:
+                logger.warning(f"Could not create signed URL for {file_path}")
+                # Fallback to public URL
+                return f"{os.getenv('SUPABASE_URL')}/storage/v1/object/public/{bucket_name}/{file_path}"
+                
+        except Exception as e:
+            logger.error(f"Error creating storage URL for {file_path}: {e}")
+            # Fallback to direct public URL
+            base_url = os.getenv('SUPABASE_URL')
+            return f"{base_url}/storage/v1/object/public/{bucket_name}/{file_path.lstrip('/')}"
+    
+    def download_storage_file(self, file_path: str, bucket_name: str = 'user-profile') -> Optional[bytes]:
+        """Download file from Supabase Storage"""
+        try:
+            # Remove leading slash if present
+            file_path = file_path.lstrip('/')
+            
+            # Download the file
+            response = self.supabase.storage.from_(bucket_name).download(file_path)
+            
+            if response:
+                logger.debug(f"Successfully downloaded {file_path} from {bucket_name}")
+                return response
+            else:
+                logger.warning(f"Could not download {file_path} from {bucket_name}")
+                return None
+                
+        except Exception as e:
+            logger.error(f"Error downloading {file_path} from {bucket_name}: {e}")
+            return None
+    
     def get_ph_date(self):
         """Get current date in Philippine timezone (UTC+8)"""
         return self.get_ph_datetime().date()

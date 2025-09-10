@@ -63,11 +63,35 @@ class ArcFaceService:
     def download_image(self, url: str) -> Optional[np.ndarray]:
         """Download image from URL and convert to OpenCV format"""
         try:
-            response = requests.get(url, timeout=10)
+            # Check if this looks like a Supabase Storage path
+            if not url.startswith('http') and self.supabase_service:
+                # This might be a storage path, try to download from Supabase Storage
+                logger.info(f"Attempting to download from Supabase Storage: {url}")
+                
+                # Try to download directly from storage
+                file_data = self.supabase_service.download_storage_file(url, 'user-profile')
+                if file_data:
+                    image = Image.open(BytesIO(file_data))
+                    opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                    logger.info(f"Successfully downloaded image from storage: {url}")
+                    return opencv_image
+                else:
+                    # Fallback: try to get signed URL and download via HTTP
+                    signed_url = self.supabase_service.get_storage_url(url, 'user-profile')
+                    logger.info(f"Trying signed URL: {signed_url}")
+                    url = signed_url
+            
+            # Standard HTTP download
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+            
+            response = requests.get(url, timeout=30, headers=headers)
             if response.status_code == 200:
                 image = Image.open(BytesIO(response.content))
                 # Convert PIL image to OpenCV format
                 opencv_image = cv2.cvtColor(np.array(image), cv2.COLOR_RGB2BGR)
+                logger.info(f"Successfully downloaded image from URL: {url[:100]}...")
                 return opencv_image
             else:
                 logger.error(f"Failed to download image from {url}, status code: {response.status_code}")
