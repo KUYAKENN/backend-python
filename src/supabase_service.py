@@ -60,7 +60,7 @@ class SupabaseService:
         return datetime.now(ph_timezone)
     
     def get_ph_date(self):
-        """Get current date in Philippine timezone (UTC+8)"""
+        """Get current date in Philippine timezone (UTC)"""
         return self.get_ph_datetime().date()
     
     def convert_utc_to_ph_time(self, utc_time_str: str) -> str:
