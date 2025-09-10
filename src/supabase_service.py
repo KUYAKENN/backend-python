@@ -2,7 +2,7 @@ from supabase import create_client, Client
 import os
 from typing import List, Dict, Optional
 import logging
-from datetime import date, datetime
+from datetime import date, datetime, timezone, timedelta
 import time
 from dotenv import load_dotenv
 
@@ -53,6 +53,15 @@ class SupabaseService:
         except Exception as e:
             logger.error(f"Error initializing Supabase client: {e}")
             raise e
+    
+    def get_ph_datetime(self):
+        """Get current datetime in Philippine timezone (UTC+8)"""
+        ph_timezone = timezone(timedelta(hours=8))
+        return datetime.now(ph_timezone)
+    
+    def get_ph_date(self):
+        """Get current date in Philippine timezone (UTC+8)"""
+        return self.get_ph_datetime().date()
     
     def test_database_access(self) -> Dict:
         """Test database connectivity and return detailed information"""
@@ -233,8 +242,10 @@ class SupabaseService:
     def mark_attendance(self, user_id: str, user_data: Dict) -> Dict:
         """Mark attendance for a user via face recognition - only once per day"""
         try:
-            today = date.today().isoformat()
-            current_time = datetime.now().isoformat()
+            # Use Philippine timezone for consistent local time
+            ph_now = self.get_ph_datetime()
+            today = ph_now.date().isoformat()
+            current_time = ph_now.isoformat()
             
             # Check if user already marked attendance today
             existing_attendance = self.supabase.table('attendance').select('*').eq('userId', user_id).eq('scanDate', today).execute()
@@ -284,7 +295,8 @@ class SupabaseService:
     def get_today_attendance(self) -> List[Dict]:
         """Get face recognition attendance records for today only"""
         try:
-            today = date.today().isoformat()
+            # Use Philippine timezone for consistent local date
+            today = self.get_ph_date().isoformat()
             
             query = self.supabase.table('attendance').select('*').eq('scanDate', today)
 
@@ -312,7 +324,8 @@ class SupabaseService:
     def get_attendance_stats(self) -> Dict:
         """Get attendance statistics"""
         try:
-            today = date.today().isoformat()
+            # Use Philippine timezone for consistent local date
+            today = self.get_ph_date().isoformat()
             
             # Get today's attendance count
             today_response = self.supabase.table('attendance').select('count', count='exact').eq('scanDate', today).execute()
@@ -343,7 +356,8 @@ class SupabaseService:
     def check_attendance_today(self, user_id: str) -> bool:
         """Check if a specific user has marked attendance today"""
         try:
-            today = date.today().isoformat()
+            # Use Philippine timezone for consistent local date
+            today = self.get_ph_date().isoformat()
             
             response = self.supabase.table('attendance').select('id').eq('userId', user_id).eq('scanDate', today).execute()
             
