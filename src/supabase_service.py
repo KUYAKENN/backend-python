@@ -259,9 +259,7 @@ class SupabaseService:
                 'jobTitle': user_data.get('jobTitle', ''),
                 'scanTime': current_time,
                 'scanDate': today,
-                'status': 'PRESENT',
-                # Add a field to identify this was created through face recognition
-                'source': 'FACE_RECOGNITION'
+                'status': 'PRESENT'
             }
             
             response = self.supabase.table('attendance').insert(attendance_data).execute()
@@ -289,13 +287,9 @@ class SupabaseService:
             today = date.today().isoformat()
             
             query = self.supabase.table('attendance').select('*').eq('scanDate', today)
-            
-            # Try to filter by source field first
-            try:
-                query = query.eq('source', 'FACE_RECOGNITION')
-            except:
-                # Fallback: filter by complete user data
-                query = query.neq('firstName', '').neq('lastName', '').neq('email', '')
+
+            # Filter records with complete user data (face recognition typically has all fields)
+            query = query.neq('firstName', '').neq('lastName', '').neq('email', '')
             
             response = query.order('scanTime', desc=True).execute()
             
@@ -429,13 +423,8 @@ class SupabaseService:
             query = self.supabase.table('attendance').select('*')
             
             # Filter only records created through face recognition
-            # First try with source field, if that doesn't exist, use a different approach
-            try:
-                query = query.eq('source', 'FACE_RECOGNITION')
-            except:
-                # Fallback: If source field doesn't exist, exclude records that look like manual entries
-                # We'll assume face recognition records have more complete data
-                query = query.neq('firstName', '').neq('lastName', '').neq('email', '')
+            # Use complete user data as indicator (face recognition records have full data)
+            query = query.neq('firstName', '').neq('lastName', '').neq('email', '')
             
             # Apply additional filters
             if date_filter:
