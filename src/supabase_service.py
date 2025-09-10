@@ -63,6 +63,32 @@ class SupabaseService:
         """Get current date in Philippine timezone (UTC+8)"""
         return self.get_ph_datetime().date()
     
+    def convert_utc_to_ph_time(self, utc_time_str: str) -> str:
+        """Convert UTC timestamp string to Philippine time for display"""
+        try:
+            # Parse the UTC timestamp (assuming it's stored as UTC)
+            if isinstance(utc_time_str, str):
+                # Handle different timestamp formats
+                if 'T' in utc_time_str:
+                    if '+' in utc_time_str or 'Z' in utc_time_str:
+                        # Already has timezone info
+                        dt = datetime.fromisoformat(utc_time_str.replace('Z', '+00:00'))
+                    else:
+                        # Assume UTC if no timezone info
+                        dt = datetime.fromisoformat(utc_time_str).replace(tzinfo=timezone.utc)
+                else:
+                    # Handle format like "2025-08-27 16:00:30.374903"
+                    dt = datetime.fromisoformat(utc_time_str).replace(tzinfo=timezone.utc)
+                
+                # Convert to Philippine timezone
+                ph_timezone = timezone(timedelta(hours=8))
+                ph_time = dt.astimezone(ph_timezone)
+                return ph_time.isoformat()
+            return utc_time_str
+        except Exception as e:
+            logger.error(f"Error converting timestamp: {e}")
+            return utc_time_str
+    
     def test_database_access(self) -> Dict:
         """Test database connectivity and return detailed information"""
         results = {
@@ -312,6 +338,9 @@ class SupabaseService:
                     record.get('lastName') and 
                     record.get('email') and
                     record.get('userId')):
+                    # Convert scanTime to Philippine timezone for display
+                    if record.get('scanTime'):
+                        record['scanTime'] = self.convert_utc_to_ph_time(record['scanTime'])
                     face_recognition_records.append(record)
             
             logger.info(f"Retrieved {len(face_recognition_records)} face recognition attendance records for today")
@@ -386,6 +415,11 @@ class SupabaseService:
             query = query.order('scanTime', desc=True)
             
             response = query.execute()
+            
+            # Convert timestamps to Philippine timezone for display
+            for record in response.data:
+                if record.get('scanTime'):
+                    record['scanTime'] = self.convert_utc_to_ph_time(record['scanTime'])
             
             return {
                 'success': True,
