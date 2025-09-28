@@ -644,6 +644,35 @@ class ArcFaceService:
             logger.error(f"Error loading embeddings from database: {e}")
             return False
     
+    def is_reload_needed(self, known_count=0, last_file_mtime=0):
+        """Check if a reload is needed based on various factors"""
+        reload_needed = False
+        reasons = []
+        
+        # Check file modification time
+        current_mtime = 0
+        try:
+            if os.path.exists(self.embeddings_file):
+                current_mtime = os.path.getmtime(self.embeddings_file)
+                if current_mtime > last_file_mtime:
+                    reload_needed = True
+                    reasons.append("embeddings file modified")
+        except Exception as e:
+            logger.error(f"Error checking file modification time: {e}")
+        
+        # Check database count
+        current_count = len(self.face_database)
+        if current_count != known_count:
+            reload_needed = True
+            reasons.append(f"face count changed ({known_count} → {current_count})")
+        
+        return {
+            'reload_needed': reload_needed,
+            'reasons': reasons,
+            'current_count': current_count,
+            'current_mtime': current_mtime
+        }
+
     def scan_and_enroll_from_database(self, supabase_service, save_to_db: bool = True) -> Dict:
         """Scan all face images from database and enroll them for recognition"""
         try:

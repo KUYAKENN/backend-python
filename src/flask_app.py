@@ -166,8 +166,14 @@ class FaceRecognitionApp:
                 self.auto_reload_manager.start_monitoring()
                 return jsonify({
                     'success': True,
-                    'message': 'Auto-reload monitoring started',
-                    'check_interval': self.auto_reload_manager.check_interval
+                    'message': 'Enhanced auto-reload monitoring started (every 15 seconds)',
+                    'check_interval': self.auto_reload_manager.check_interval,
+                    'features': [
+                        'File modification monitoring',
+                        'Database user count tracking',
+                        'Pending enrollment detection',
+                        'Periodic full sync (5 min)'
+                    ]
                 })
             except Exception as e:
                 logger.error(f"Error starting auto-reload: {e}")
@@ -194,13 +200,35 @@ class FaceRecognitionApp:
 
         @self.app.route('/auto-reload/status', methods=['GET'])
         def auto_reload_status():
-            """Get auto-reload status"""
-            return jsonify({
-                'success': True,
-                'auto_reload_enabled': self.auto_reload_manager.auto_reload_enabled,
-                'check_interval': self.auto_reload_manager.check_interval,
-                'known_user_count': self.auto_reload_manager.known_user_count
-            })
+            """Get comprehensive auto-reload status"""
+            try:
+                status = self.auto_reload_manager.get_status()
+                return jsonify({
+                    'success': True,
+                    **status
+                })
+            except Exception as e:
+                logger.error(f"Error getting auto-reload status: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error getting status: {str(e)}'
+                }), 500
+        
+        @self.app.route('/auto-reload/force', methods=['POST'])
+        def force_reload():
+            """Force an immediate reload of the face database"""
+            try:
+                result = self.auto_reload_manager.force_reload()
+                if result.get('success'):
+                    return jsonify(result)
+                else:
+                    return jsonify(result), 500
+            except Exception as e:
+                logger.error(f"Error during force reload: {e}")
+                return jsonify({
+                    'success': False,
+                    'message': f'Error during force reload: {str(e)}'
+                }), 500
 
         @self.app.route('/initialize', methods=['POST'])
         def initialize_system():
@@ -851,8 +879,12 @@ class FaceRecognitionApp:
             
             # Start auto-reload monitoring
             self.auto_reload_manager.start_monitoring()
-            print("🔄 Auto-reload monitoring enabled - detecting new registrations automatically")
-            logger.info("🔄 Auto-reload monitoring enabled - system will detect new registrations automatically")
+            print("🔄 Enhanced auto-reload monitoring enabled (every 15 seconds)")
+            print("   ├── File modification detection")
+            print("   ├── Database changes monitoring") 
+            print("   ├── Pending enrollment tracking")
+            print("   └── Periodic full sync (5 min)")
+            logger.info("🔄 Enhanced auto-reload monitoring enabled - system will detect new registrations automatically")
             
             print("\n" + "="*80)
             print("🌟 SYSTEM STATUS: READY")
@@ -876,47 +908,161 @@ class AutoReloadManager:
         self.arcface_service = arcface_service
         self.supabase_service = supabase_service
         self.known_user_count = 0
+        self.known_face_count = 0
         self.auto_reload_enabled = False
-        self.check_interval = 60  # Check every 60 seconds
+        self.check_interval = 15  # Check every 15 seconds (more frequent)
         self.monitoring_thread = None
+        self.last_database_sync = datetime.now()
+        self.last_file_modification = self._get_embeddings_file_mtime()
+        self.failed_sync_count = 0
+        self.max_failed_syncs = 3
+        
+    def _get_embeddings_file_mtime(self):
+        """Get the modification time of the face_embeddings.pkl file"""
+        try:
+            embeddings_file = self.arcface_service.embeddings_file
+            if os.path.exists(embeddings_file):
+                return os.path.getmtime(embeddings_file)
+        except Exception as e:
+            logger.error(f"Error getting file modification time: {e}")
+        return 0
         
     def start_monitoring(self):
-        """Start background monitoring for new users"""
+        """Start background monitoring for new users and faces"""
         if not self.auto_reload_enabled:
             self.auto_reload_enabled = True
             self.monitoring_thread = threading.Thread(target=self._monitor_loop, daemon=True)
             self.monitoring_thread.start()
-            logger.info("🔄 Auto-reload monitoring started")
+            logger.info("🔄 Enhanced auto-reload monitoring started (checking every 15 seconds)")
     
     def stop_monitoring(self):
         """Stop background monitoring"""
         self.auto_reload_enabled = False
         logger.info("⏹️ Auto-reload monitoring stopped")
     
+    def force_reload(self):
+        """Force an immediate reload of the face database"""
+        try:
+            logger.info("🔄 Force reloading face database...")
+            
+            # First, try to sync from database
+            sync_result = self.arcface_service.sync_faces_from_database()
+            
+            # Also reload from local file if it exists and was modified
+            if os.path.exists(self.arcface_service.embeddings_file):
+                self.arcface_service.load_face_database()
+                logger.info("📂 Reloaded local face embeddings file")
+            
+            # Update our tracking variables
+            self.known_face_count = len(self.arcface_service.face_database)
+            self.last_file_modification = self._get_embeddings_file_mtime()
+            self.last_database_sync = datetime.now()
+            self.failed_sync_count = 0
+            
+            logger.info(f"✅ Force reload completed - {self.known_face_count} faces loaded")
+            return sync_result
+            
+        except Exception as e:
+            error_msg = f"Error during force reload: {e}"
+            logger.error(error_msg)
+            return {'success': False, 'message': error_msg}
+    
     def _monitor_loop(self):
-        """Background monitoring loop"""
+        """Enhanced background monitoring loop"""
         while self.auto_reload_enabled:
             try:
-                # Check for new users
-                users = self.supabase_service.get_all_users_with_profiles()
-                current_count = len(users) if users else 0
+                reload_needed = False
+                reload_reason = []
                 
-                if self.known_user_count == 0:
-                    # First time initialization
-                    self.known_user_count = current_count
-                    logger.info(f"📊 Initial user count: {current_count}")
-                elif current_count > self.known_user_count:
-                    # New users detected, reload face database
-                    logger.info(f"🆕 New users detected! Count changed from {self.known_user_count} to {current_count}")
-                    success_count = self.arcface_service.register_multiple_faces(users)
-                    self.known_user_count = current_count
-                    logger.info(f"✅ Reloaded face database with {success_count} faces")
+                # Check 1: File modification time (for external changes)
+                current_file_mtime = self._get_embeddings_file_mtime()
+                if current_file_mtime > self.last_file_modification:
+                    reload_needed = True
+                    reload_reason.append(f"embeddings file modified")
+                    self.last_file_modification = current_file_mtime
+                
+                # Check 2: Database user count
+                try:
+                    users = self.supabase_service.get_all_users_with_profiles()
+                    current_user_count = len(users) if users else 0
+                    
+                    if self.known_user_count == 0:
+                        # First time initialization
+                        self.known_user_count = current_user_count
+                        self.known_face_count = len(self.arcface_service.face_database)
+                        logger.info(f"📊 Initial counts - Users: {current_user_count}, Faces: {self.known_face_count}")
+                    elif current_user_count > self.known_user_count:
+                        # New users detected
+                        reload_needed = True
+                        reload_reason.append(f"new users ({self.known_user_count} → {current_user_count})")
+                        self.known_user_count = current_user_count
+                except Exception as e:
+                    logger.error(f"Error checking database user count: {e}")
+                    self.failed_sync_count += 1
+                
+                # Check 3: Users who need face enrollment (haven't been processed yet)
+                try:
+                    users_to_enroll = self.supabase_service.get_users_for_face_enrollment()
+                    if users_to_enroll and len(users_to_enroll) > 0:
+                        reload_needed = True
+                        reload_reason.append(f"{len(users_to_enroll)} users need face enrollment")
+                except Exception as e:
+                    logger.error(f"Error checking users for enrollment: {e}")
+                
+                # Check 4: Periodic full sync (every 5 minutes)
+                time_since_last_sync = (datetime.now() - self.last_database_sync).total_seconds()
+                if time_since_last_sync > 300:  # 5 minutes
+                    reload_needed = True
+                    reload_reason.append("periodic sync (5 min interval)")
+                
+                # Perform reload if needed
+                if reload_needed:
+                    logger.info(f"🔄 Auto-reload triggered: {', '.join(reload_reason)}")
+                    
+                    # Sync faces from database
+                    sync_result = self.arcface_service.sync_faces_from_database()
+                    
+                    # Also reload local embeddings file
+                    self.arcface_service.load_face_database()
+                    
+                    # Update tracking
+                    new_face_count = len(self.arcface_service.face_database)
+                    if new_face_count != self.known_face_count:
+                        logger.info(f"✅ Face database updated: {self.known_face_count} → {new_face_count} faces")
+                        self.known_face_count = new_face_count
+                    
+                    self.last_database_sync = datetime.now()
+                    self.failed_sync_count = 0
+                    
+                    if sync_result.get('success'):
+                        enrolled = sync_result.get('enrolled_count', 0)
+                        failed = sync_result.get('failed_count', 0)
+                        if enrolled > 0 or failed > 0:
+                            logger.info(f"📈 Sync results: {enrolled} enrolled, {failed} failed")
+                
+                # Check if we've had too many failed syncs
+                if self.failed_sync_count >= self.max_failed_syncs:
+                    logger.warning(f"⚠️ {self.failed_sync_count} consecutive sync failures - continuing monitoring")
+                    self.failed_sync_count = 0  # Reset to continue trying
                 
                 time.sleep(self.check_interval)
                 
             except Exception as e:
-                logger.error(f"Error in auto-reload monitoring: {e}")
+                logger.error(f"Error in auto-reload monitoring loop: {e}")
+                self.failed_sync_count += 1
                 time.sleep(self.check_interval)
+    
+    def get_status(self):
+        """Get the current status of the auto-reload manager"""
+        return {
+            'enabled': self.auto_reload_enabled,
+            'check_interval': self.check_interval,
+            'known_user_count': self.known_user_count,
+            'known_face_count': self.known_face_count,
+            'last_database_sync': self.last_database_sync.isoformat() if self.last_database_sync else None,
+            'failed_sync_count': self.failed_sync_count,
+            'thread_alive': self.monitoring_thread.is_alive() if self.monitoring_thread else False
+        }
 
 
 # Create the Flask app instance
